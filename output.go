@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
@@ -52,12 +53,26 @@ func (m *multiOutput) Connect(proc *process) {
 
 func (m *multiOutput) PipeOutput(proc *process) {
 	pipe := m.openPipe(proc)
+	var prefixBuf bytes.Buffer
+	for prefixBuf.Len() < m.maxNameLength {
+		prefixBuf.WriteByte(' ')
+	}
+	prefixBuf.WriteString("   ")
+	prefix := prefixBuf.String()
 
 	go func(proc *process, pipe *ptyPipe) {
 		scanner := bufio.NewScanner(pipe.pty)
 
 		for scanner.Scan() {
-			m.WriteLine(proc, scanner.Bytes())
+			output := scanner.Bytes()
+			var outputJSON interface{}
+			if err := json.Unmarshal(output, &outputJSON); err == nil {
+				if indentedJSON, err := json.MarshalIndent(&outputJSON, prefix, "  "); err == nil {
+					m.WriteLine(proc, indentedJSON)
+					continue
+				}
+			}
+			m.WriteLine(proc, output)
 		}
 	}(proc, pipe)
 }
