@@ -12,7 +12,8 @@ import (
 )
 
 type ptyPipe struct {
-	pty, tty *os.File
+	stdoutPty, stdoutTty *os.File
+	stderrPty, stderrTty *os.File
 }
 
 type multiOutput struct {
@@ -27,12 +28,15 @@ func (m *multiOutput) openPipe(proc *process) (pipe *ptyPipe) {
 
 	pipe = m.pipes[proc]
 
-	pipe.pty, pipe.tty, err = termios.Pty()
+	pipe.stdoutPty, pipe.stdoutTty, err = termios.Pty()
 	fatalOnErr(err)
 
-	proc.Stdout = pipe.tty
-	proc.Stderr = pipe.tty
-	proc.Stdin = pipe.tty
+	pipe.stderrPty, pipe.stderrTty, err = termios.Pty()
+	fatalOnErr(err)
+
+	proc.Stdout = pipe.stdoutTty
+	proc.Stderr = pipe.stderrTty
+	proc.Stdin = pipe.stdoutTty
 	proc.SysProcAttr = &syscall.SysProcAttr{Setctty: true, Setsid: true}
 
 	return
@@ -54,22 +58,32 @@ func (m *multiOutput) PipeOutput(proc *process) {
 	pipe := m.openPipe(proc)
 
 	go func(proc *process, pipe *ptyPipe) {
-		scanner := bufio.NewScanner(pipe.pty)
+		scanner := bufio.NewScanner(pipe.stdoutPty)
 
 		for scanner.Scan() {
-			m.WriteLine(proc, scanner.Bytes())
+			m.WriteLine(proc, "stdout", scanner.Bytes())
+		}
+	}(proc, pipe)
+
+	go func(proc *process, pipe *ptyPipe) {
+		scanner := bufio.NewScanner(pipe.stderrPty)
+
+		for scanner.Scan() {
+			m.WriteLine(proc, "stderr", scanner.Bytes())
 		}
 	}(proc, pipe)
 }
 
 func (m *multiOutput) ClosePipe(proc *process) {
 	if pipe := m.pipes[proc]; pipe != nil {
-		pipe.pty.Close()
-		pipe.tty.Close()
+		pipe.stdoutPty.Close()
+		pipe.stdoutTty.Close()
+		pipe.stderrPty.Close()
+		pipe.stderrTty.Close()
 	}
 }
 
-func (m *multiOutput) WriteLine(proc *process, p []byte) {
+func (m *multiOutput) WriteLine(proc *process, stream string, p []byte) {
 	var buf bytes.Buffer
 
 	if m.printProcName {
@@ -79,6 +93,25 @@ func (m *multiOutput) WriteLine(proc *process, p []byte) {
 		buf.WriteString(proc.Name)
 
 		for buf.Len()-len(color) < m.maxNameLength {
+			buf.WriteByte(' ')
+		}
+
+		buf.WriteString("\033[0m | ")
+
+		// now for the stream name - stdout/stderr
+		streamColor := 64
+		if stream == "stderr" {
+			streamColor = 63
+		} else if stream == "error" {
+			streamColor = 88
+		} else if stream == "status" {
+			streamColor = 80
+		}
+		color = fmt.Sprintf("\033[1;38;5;%vm", streamColor)
+
+		buf.WriteString(color)
+		buf.WriteString(stream)
+		if stream == "error" {
 			buf.WriteByte(' ')
 		}
 
@@ -95,7 +128,7 @@ func (m *multiOutput) WriteLine(proc *process, p []byte) {
 }
 
 func (m *multiOutput) WriteErr(proc *process, err error) {
-	m.WriteLine(proc, []byte(
+	m.WriteLine(proc, "error", []byte(
 		fmt.Sprintf("\033[0;31m%v\033[0m", err),
 	))
 }

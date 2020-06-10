@@ -33,7 +33,7 @@ func newProcess(name, command string, color int, root string, port int, output *
 }
 
 func (p *process) writeLine(b []byte) {
-	p.output.WriteLine(p, b)
+	p.output.WriteLine(p, "status", b)
 }
 
 func (p *process) writeErr(err error) {
