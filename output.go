@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
@@ -54,23 +55,38 @@ func (m *multiOutput) Connect(proc *process) {
 	m.pipes[proc] = &ptyPipe{}
 }
 
+func (m *multiOutput) writeTtyLine(proc *process, stream string, pty *os.File) {
+	scanner := bufio.NewScanner(pty)
+
+	prefixLength := m.maxNameLength + 3 + 6 + 3
+	var prefixBuf bytes.Buffer
+	for prefixBuf.Len() < prefixLength {
+		prefixBuf.WriteByte(' ')
+	}
+	prefix := prefixBuf.String()
+
+	for scanner.Scan() {
+		output := scanner.Bytes()
+		var outputJSON interface{}
+		if err := json.Unmarshal(output, &outputJSON); err == nil {
+			if indentedJSON, err := json.MarshalIndent(&outputJSON, prefix, "  "); err == nil {
+				m.WriteLine(proc, stream, indentedJSON)
+				continue
+			}
+		}
+		m.WriteLine(proc, stream, output)
+	}
+}
+
 func (m *multiOutput) PipeOutput(proc *process) {
 	pipe := m.openPipe(proc)
 
 	go func(proc *process, pipe *ptyPipe) {
-		scanner := bufio.NewScanner(pipe.stdoutPty)
-
-		for scanner.Scan() {
-			m.WriteLine(proc, "stdout", scanner.Bytes())
-		}
+		m.writeTtyLine(proc, "stdout", pipe.stdoutPty)
 	}(proc, pipe)
 
 	go func(proc *process, pipe *ptyPipe) {
-		scanner := bufio.NewScanner(pipe.stderrPty)
-
-		for scanner.Scan() {
-			m.WriteLine(proc, "stderr", scanner.Bytes())
-		}
+		m.writeTtyLine(proc, "stderr", pipe.stderrPty)
 	}(proc, pipe)
 }
 
